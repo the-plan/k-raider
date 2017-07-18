@@ -198,7 +198,7 @@ class Raider : AbstractVerticle() {
         "message" to "🚀 ready to fight",
         "basestar" to null,
         "coordinates" to obj(
-          "x" to random(0.0, 50.0), "y" to random(0.0, 50.0)
+          "x" to random(0.0, 400.0), "y" to random(0.0, 400.0)
         ),
         "app_id" to (System.getenv("APP_ID") ?: "🤖"),
         "instance_id" to (System.getenv("INSTANCE_ID") ?: "🤖"),
@@ -255,8 +255,8 @@ class Raider : AbstractVerticle() {
       record?.metadata?.getJsonObject("coordinates")
         ?.put("x", computedX)
         ?.put("y",computedY)
-        ?.put("xVelocity",xVelocity)
-        ?.put("yVelocity",yVelocity)
+        ?.put("xVelocity",computedXVelocity)
+        ?.put("yVelocity",computedYVelocity)
 
       record?.metadata?.put("basestar", baseStar?.record?.name)
 
