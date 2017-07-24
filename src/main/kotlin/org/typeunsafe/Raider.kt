@@ -41,7 +41,6 @@ fun main(args: Array<String>) {
 
 }
 
-
 class Raider : AbstractVerticle() {
 
   private var discovery: ServiceDiscovery? = null
@@ -283,6 +282,7 @@ class Raider : AbstractVerticle() {
 
     }
 
+    // use me with other microservices
     ServiceDiscoveryRestEndpoint.create(router, discovery)
 
     // link/bind healthCheck to a route
