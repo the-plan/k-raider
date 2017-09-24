@@ -9,3 +9,5 @@
 .vscode
 dump.rdb
 target/
+create-vm.sh
+remove-vm.sh

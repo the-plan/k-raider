@@ -27,12 +27,14 @@ import io.vertx.kotlin.core.json.*
 import io.vertx.servicediscovery.rest.ServiceDiscoveryRestEndpoint
 
 import me.atrox.haikunator.HaikunatorBuilder
+import java.util.*
 import kotlin.reflect.KClass
 
 
 private fun RoutingContext.json(jsonObject: JsonObject) {
   this.response().putHeader("content-type", "application/json;charset=UTF-8").end(jsonObject.encodePrettily())
 }
+
 
 
 fun main(args: Array<String>) {
@@ -45,8 +47,10 @@ class Raider : AbstractVerticle() {
 
   private var discovery: ServiceDiscovery? = null
   private var record: Record? = null
-  private val discoveredServices: List<Record>? = null
+  //private val discoveredServices: List<Record>? = null
   private var baseStar: BaseStar? =null
+  private var healthCheck: HealthCheckHandler? =null
+  private var breaker: CircuitBreaker? =null
 
   private val x: Double = 0.0
   private val y: Double = 0.0
@@ -72,74 +76,117 @@ class Raider : AbstractVerticle() {
     })
   }
 
-  fun searchAndSelectOneBaseStar(breaker: CircuitBreaker) {
-    /* 🤖 === search for a baseStar === */
+  fun watchingMyBaseStar(baseStar: BaseStar) {
+
+    vertx.setPeriodic(1000, { timerId ->
+      // and the breaker ??? TODO: use the breaker before ?
+      baseStar.client.get("/health").send { asyncGetRes ->
+        when {
+          asyncGetRes.failed() -> {
+            record?.metadata?.getJsonObject("coordinates")
+              ?.put("xVelocity",0)
+              ?.put("yVelocity",0)
+            // btw, you never stop in space 👾
+
+            discovery?.update(record, {asyncUpdateResult ->
+              println("😡😡😡 I'm alone ???")
+            })
+            
+            // time to search a new basestar
+            vertx.setTimer(3000, { id ->
+              vertx.cancelTimer(timerId)
+              searchAndSelectOneBaseStar()
+            })
+            
+            // if we have no more basestar ??? => had to be managed in searchAndSelectOneBaseStar()
+
+          }
+          asyncGetRes.succeeded() -> {
+            // 😃 === all is fine ===
+            //println(asyncGetRes.result().bodyAsJsonObject())
+          }
+        }
+      }
+
+
+    })
+
+  }
+
+  /**
+   * See: http://vertx.io/docs/vertx-service-discovery/kotlin/
+   * Once you have chosen the Record, you can retrieve a ServiceReference and then the service object
+   */
+  fun subscribeToBaseStar(selectedRecord: Record) {
+
+    val serviceReference = discovery?.getReference(selectedRecord)
+    val webClient = serviceReference?.getAs(WebClient::class.java)
+
+
+    // 👋 === CIRCUIT BREAKER === try to register to the basestar
+
+    breaker?.execute<String>({ future ->
+
+      webClient?.post("/api/raiders")?.sendJson(json { obj("registration" to record?.registration )}, { baseStarResponse ->
+
+        when {
+          baseStarResponse.failed() -> {
+            this.baseStar = null // 😧 remove the basestar
+            future.fail("😡 ouch something bad happened")
+          }
+
+          baseStarResponse.succeeded() -> {
+            println("👏 you found a basestar ${baseStarResponse?.result()?.bodyAsJsonObject()?.encodePrettily()}")
+            val selectedBaseStar = BaseStar(selectedRecord, webClient)
+            this.baseStar = selectedBaseStar
+            // 👀--- time to check the health of my basestar
+            watchingMyBaseStar(selectedBaseStar)
+
+            future.complete("😃 yesss!")
+
+          }
+        }
+
+      })
+
+    })?.setHandler({ breakerResult ->
+      // TODO: eg, kill the raider
+      // Do something with the result when future completed or failed
+    })
+
+
+  }
+
+  fun searchAndSelectOneBaseStar() {
+
+    /* 🤖 === search for a baseStar in the discovery backend === */
+
     discovery?.getRecords(
       {r -> r.metadata.getString("kind") == "basestar" && r.status == io.vertx.servicediscovery.Status.UP },
       { asyncResult ->
         when {
         // --- 😡 ---
-          asyncResult.failed() -> {
-            //TODO: foo
-          }
+          asyncResult.failed() -> { }
         // --- 😃 ---
           asyncResult.succeeded() -> {
             val baseStarsRecords = asyncResult.result()
-            // choose you basestar
-            // search for the basestar with less raiders
-            baseStarsRecords.minBy { r -> r.metadata.getInteger("raiders_counter") }.let {
+            
+            // === choose randomly a basestar === ⚠️ search a better computation
+
+            baseStarsRecords.size.let {
               when(it) {
-                null -> {/* TODO: foo */}
+              // --- 😡 --- oh oh no basestar online ?!!!
+                0 -> {} // ⚠️ TODO: wait and retry
                 else -> {
-                  /*
-                    http://vertx.io/docs/vertx-service-discovery/kotlin/
-                    Once you have chosen the Record, you can retrieve a ServiceReference and then the service object
-                  */
-                  // find the client
-                  // circuit breaker (later)
-                  // make a post
-                  // register => new BaseStar
-                  // WebClient client = reference.getAs(WebClient.class);
-
-                  val serviceReference = discovery?.getReference(it)
-                  val webClient = serviceReference?.getAs(WebClient::class.java)
-
-                  // health cheack or circuit breaker
-                  // 👋 === CIRCUIT BREAKER ===
-
-                  breaker.execute<String>({ future ->
-
-                    webClient?.post("/api/raiders")?.sendJson(json { obj("registration" to record?.registration )}, { baseStarResponse ->
-
-                      when {
-                        baseStarResponse.failed() -> {
-                          // 😧 remove the basestar
-                          this.baseStar = null
-                          future.fail("😡 ouch something bad happened")
-                        }
-
-                        baseStarResponse.succeeded() -> {
-                          println("🌸 you found a basestar 👏 ${baseStarResponse?.result()?.bodyAsJsonObject()?.encodePrettily()}")
-                          this.baseStar = BaseStar(it, webClient)
-                          future.complete("😃 yesss!")
-                        }
-                      }
-
-                    })
-
-                  }).setHandler({ breakerResult ->
-                    // Do something with the result when future completed or failed
-                  })
-
+                  val selectedRecord = baseStarsRecords.get(Random().nextInt(it)) // ? -1
+                  subscribeToBaseStar(selectedRecord)
                 }
               }
             }
-
           }
         }
-
       }
-    ) // 🤖 end of the discovery
+    ) // ⬅️ end of the discovery
   }
 
   override fun start() {
@@ -147,9 +194,7 @@ class Raider : AbstractVerticle() {
     fun random(min: Double, max: Double): Double {
       return (Math.random() * (max+1.0-min))+min
     }
-
-
-
+    
     /* 🔦 === Discovery part === */
 
     // Redis Backend settings
@@ -207,7 +252,7 @@ class Raider : AbstractVerticle() {
     }
 
     /* 🤖 === health check === */
-    val healthCheck = HealthCheckHandler.create(vertx)
+    healthCheck = HealthCheckHandler.create(vertx)
     healthCheck?.register("iamok",{ future ->
       discovery?.getRecord({ r -> r.registration == record?.registration}, {
         asyncRes ->
@@ -221,32 +266,27 @@ class Raider : AbstractVerticle() {
     println("🎃  " + record?.toJson()?.encodePrettily())
 
     /* 🚦 === Define a circuit breaker === */
-    var breaker = CircuitBreaker.create("bsg-circuit-breaker", vertx, CircuitBreakerOptions(
+    breaker = CircuitBreaker.create("bsg-circuit-breaker", vertx, CircuitBreakerOptions(
       maxFailures = 5,
       timeout = 20000,
       fallbackOnFailure = true,
       resetTimeout = 100000))
-
-
+    
     /* === Define routes === */
 
     val router = Router.router(vertx)
     router.route().handler(BodyHandler.create())
-
-
+    
     // call by a basestar
     router.post("/api/coordinates").handler { context ->
-
-      //println("👋 ${context.bodyAsJson}")
-
+      
       // check data -> if null, don't move
       val computedX =  context.bodyAsJson.getDouble("x") ?: x
       val computedY =  context.bodyAsJson.getDouble("y") ?: y
 
       val computedXVelocity =  context.bodyAsJson.getDouble("xVelocity") ?: xVelocity
       val computedYVelocity =  context.bodyAsJson.getDouble("yVelocity") ?: yVelocity
-
-
+      
       println("🚀 (${record?.name}) moves: $computedX - $computedY thx to ${baseStar?.record?.name}")
 
       /* 💾 === updating record of the service === */
@@ -257,7 +297,14 @@ class Raider : AbstractVerticle() {
         ?.put("xVelocity",computedXVelocity)
         ?.put("yVelocity",computedYVelocity)
 
-      record?.metadata?.put("basestar", baseStar?.record?.name)
+      //record?.metadata?.put("basestar", baseStar?.record?.name)
+
+      record?.metadata?.put("basestar", json {
+        obj(
+          "name:" to baseStar?.record?.name,
+          "color" to baseStar?.record?.metadata?.get("color")
+        )
+      })
 
       discovery?.update(record, {asyncUpdateResult ->
         // foo
@@ -283,7 +330,7 @@ class Raider : AbstractVerticle() {
     }
 
     // use me with other microservices
-    ServiceDiscoveryRestEndpoint.create(router, discovery)
+    ServiceDiscoveryRestEndpoint.create(router, discovery) // ⚠️ ne pas oublier
 
     // link/bind healthCheck to a route
     router.get("/health").handler(healthCheck)
@@ -293,8 +340,7 @@ class Raider : AbstractVerticle() {
     /* === Start the server === */
     val httpPort = System.getenv("PORT")?.toInt() ?: 8080
 
-
-
+    
     vertx.createHttpServer(
       HttpServerOptions(
         port = httpPort
@@ -316,35 +362,18 @@ class Raider : AbstractVerticle() {
 
                 asyncRes.succeeded() -> {
                   println("😃 Microservice is published! ${asyncRes.result().registration}")
-
-                  /*
-                      === all is 👍 ===
-
-                      - do a discovery of the basestars
-                      - choose a basestar (to be "calculated") -> create a basestar class
-                      - 👋 say hi to the base star
-                      - have a POST route to be notified and move
-                        - update record with new coordinates
-                      - check if my basestar is ok
-
-                  */
-
-                  // TODO: vertx.setPeriodic because raider can start before basestar or if new basestar
-                  // do post only if no associted basestar or if the basestar does not repond
-
+                  
                   /* 🤖 === search for a baseStar === */
-                  searchAndSelectOneBaseStar(breaker)
-
-                }
-
-              }
-            })
-
-          }
-        }
-      }
-  }
-}
+                  searchAndSelectOneBaseStar()
+                  
+                } // ⬅️ succeed
+              } // ⬅️ when
+            }) // ⬅️ publish
+          } // ⬅️ succeed
+        } // ⬅️ when
+      } // ⬅️ listen
+  } // ⬅️ start()
+} // ⬅️ class
 
 
 
@@ -353,4 +382,10 @@ vertx.setPeriodic(1000, { id ->
   // This handler will get called every second
   println("timer fired!")
 })
+
+                  /*
+                  var timerID = vertx.setTimer(2000, { id ->
+
+                  })
+                  */
  */
