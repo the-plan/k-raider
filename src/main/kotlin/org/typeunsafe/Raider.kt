@@ -150,6 +150,7 @@ class Raider : AbstractVerticle() {
       })
 
     })?.setHandler({ breakerResult ->
+  
       // TODO: eg, kill the raider
       // Do something with the result when future completed or failed
     })
@@ -176,7 +177,10 @@ class Raider : AbstractVerticle() {
             baseStarsRecords.size.let {
               when(it) {
               // --- 😡 --- oh oh no basestar online ?!!!
-                0 -> {} // ⚠️ TODO: wait and retry
+                0 -> {
+                  println("--- 😡 --- oh oh no basestar online ?!!!")
+                  searchAndSelectOneBaseStar()
+                } // ⚠️ wait and retry
                 else -> {
                   val selectedRecord = baseStarsRecords.get(Random().nextInt(it)) // ? -1
                   subscribeToBaseStar(selectedRecord)
